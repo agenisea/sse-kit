@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/agenisea/sse-kit/main/logo.png" alt="sse-kit logo" width="200" />
+  <img src="https://raw.githubusercontent.com/agenisea/sse-kit/main/assets/logo.png" alt="sse-kit logo" width="200" />
 </p>
 
 # @agenisea/sse-kit
