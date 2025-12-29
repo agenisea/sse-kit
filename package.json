@@ -1,6 +1,6 @@
 {
   "name": "@agenisea/sse-kit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Server-Sent Events streaming for TypeScript. Framework-agnostic with React hooks, circuit breaker, retry, and observability.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -51,7 +51,9 @@
   "sideEffects": false,
   "files": [
     "dist",
+    "docs",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {
