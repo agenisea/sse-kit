@@ -1,5 +1,5 @@
 {
-  "name": "sse-kit",
+  "name": "@agenisea/sse-kit",
   "version": "0.1.0",
   "description": "Server-Sent Events streaming for TypeScript. Framework-agnostic with React hooks, circuit breaker, retry, and observability.",
   "type": "module",

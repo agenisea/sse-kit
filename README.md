@@ -20,11 +20,11 @@ Server-Sent Events streaming for TypeScript. Framework-agnostic, works with Next
 ## Installation
 
 ```bash
-npm install sse-kit
+npm install @agenisea/sse-kit
 # or
-pnpm add sse-kit
+pnpm add @agenisea/sse-kit
 # or
-yarn add sse-kit
+yarn add @agenisea/sse-kit
 ```
 
 ## Quick Start
@@ -32,7 +32,7 @@ yarn add sse-kit
 ### Server-side (Next.js API Route)
 
 ```typescript
-import { createStreamingResponse, createSSEResponse } from 'sse-kit/server'
+import { createStreamingResponse, createSSEResponse } from '@agenisea/sse-kit/server'
 
 export async function POST(request: Request) {
   const { stream, orchestrator } = createStreamingResponse({
@@ -64,7 +64,7 @@ export async function POST(request: Request) {
 ### Client-side (React Hook)
 
 ```typescript
-import { useSSEStream } from 'sse-kit/client'
+import { useSSEStream } from '@agenisea/sse-kit/client'
 
 function StreamingComponent() {
   const { state, start, cancel, reset } = useSSEStream({
@@ -88,7 +88,7 @@ function StreamingComponent() {
 
 ## API Reference
 
-### Server (`sse-kit/server`)
+### Server (`@agenisea/sse-kit/server`)
 
 #### `createStreamingResponse(config?)`
 
@@ -130,7 +130,7 @@ const { stream, orchestrator } = createStreamingResponse({
 Observability hooks for monitoring stream lifecycle:
 
 ```typescript
-import type { StreamObserver } from 'sse-kit/server'
+import type { StreamObserver } from '@agenisea/sse-kit/server'
 
 const observer: StreamObserver = {
   onStreamStart: () => {
@@ -157,7 +157,7 @@ const observer: StreamObserver = {
 #### SSE Helpers
 
 ```typescript
-import { createSSEEncoder } from 'sse-kit/server'
+import { createSSEEncoder } from '@agenisea/sse-kit/server'
 
 const sse = createSSEEncoder(controller)
 sse.start({ version: '1.0' })
@@ -165,7 +165,7 @@ sse.delta('Hello ', { id: '1' })  // With event ID for reconnection
 sse.done({ success: true })
 ```
 
-### Client (`sse-kit/client`)
+### Client (`@agenisea/sse-kit/client`)
 
 #### `useSSEStream(options)`
 
@@ -179,7 +179,7 @@ import type {
   SSEParseConfig,       // extractResult, extractError, isComplete, isError
   SSEResilienceConfig,  // retry
   SSEBrowserConfig,     // warnOnUnload
-} from 'sse-kit/client'
+} from '@agenisea/sse-kit/client'
 
 const { state, start, cancel, reset, isStreaming } = useSSEStream({
   // Connection
@@ -231,7 +231,7 @@ const response = await withRetry(() => fetch('/api/stream'), {
 })
 ```
 
-### Types (`sse-kit/types`)
+### Types (`@agenisea/sse-kit/types`)
 
 ```typescript
 import type {
@@ -242,9 +242,9 @@ import type {
   TimeoutConfig,
   HeartbeatConfig,
   CircuitBreakerConfig,
-} from 'sse-kit/types'
+} from '@agenisea/sse-kit/types'
 
-// Hook configuration interfaces (from sse-kit/client)
+// Hook configuration interfaces (from @agenisea/sse-kit/client)
 import type {
   SSEConnectionConfig,
   SSEPhaseConfig,
@@ -253,10 +253,10 @@ import type {
   SSEResilienceConfig,
   SSEBrowserConfig,
   UseSSEStreamOptions,
-} from 'sse-kit/client'
+} from '@agenisea/sse-kit/client'
 
-// Server observer interface (from sse-kit/server)
-import type { StreamObserver } from 'sse-kit/server'
+// Server observer interface (from @agenisea/sse-kit/server)
+import type { StreamObserver } from '@agenisea/sse-kit/server'
 ```
 
 ## Default Configuration
