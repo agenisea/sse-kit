@@ -27,9 +27,9 @@
  * function MyComponent() {
  *   const { state, start, cancel } = useSSEStream({
  *     endpoint: '/api/stream',
- *     initialPhase: 'idle',
- *     completePhase: 'complete',
- *     errorPhase: 'error',
+ *     initialEvent: 'idle',
+ *     completeEvent: 'complete',
+ *     errorEvent: 'error',
  *   })
  *
  *   return <button onClick={() => start({ query: 'test' })}>Start</button>

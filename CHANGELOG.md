@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-02-11
+
+### Breaking Changes
+
+- **Parser:** `onMessage` signature changed from `(data: T)` to `(event: string | undefined, data: T)` — event first
+- **Hook:** `phase` renamed to `event` throughout (`state.event`, `initialEvent`, `completeEvent`, `errorEvent`, `TEvent`, `SSEEventConfig`)
+- **Hook:** `TUpdate` constraint removed — `TUpdate = unknown`, data can be any shape
+- **Hook:** `onUpdate` signature changed from `(update: TUpdate)` to `(event: string | undefined, data: TUpdate)`
+- **Hook:** `isComplete`/`isError` callbacks removed — `event:` line drives lifecycle
+- **Hook:** `phaseMessage` removed from state — message is application data, not protocol
+- **Server:** `StreamOrchestrator` methods now use `event:` + `data:` wire format
+- **Server:** `sendResult` renamed to `sendData(data: TData)`
+- **Server:** `sendEvent`, `sendProgress`, `sendWithMetadata` removed
+- **Server:** `StreamOrchestrator<TUpdate extends SSEUpdate>` changed to `StreamOrchestrator<TData = unknown>`
+- **Server:** `completePhase`/`errorPhase` config renamed to `completeEvent`/`errorEvent`
+
+### Added
+
+- Parser: `onComment` callback for `:` comment lines (previously silently dropped)
+- Hook: Smart defaults for `extractResult` (data IS the result) and `extractError` (tries `error`, `message`, `detail` fields)
+- Hook: Callback identity fix — `optionsRef` pattern stabilizes `start` useCallback
+
 ## [0.1.2] - 2025-12-29
 
 ### Changed

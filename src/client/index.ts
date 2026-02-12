@@ -29,7 +29,7 @@ export {
   type ReconnectionInfo,
   type UseSSEStreamOptions,
   type SSEConnectionConfig,
-  type SSEPhaseConfig,
+  type SSEEventConfig,
   type SSEStreamCallbacks,
   type SSEParseConfig,
   type SSEResilienceConfig,

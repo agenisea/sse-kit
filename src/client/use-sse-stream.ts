@@ -4,20 +4,19 @@
  * A framework-agnostic React hook that manages SSE streaming lifecycle
  * with automatic reconnection, cancellation, and state management.
  *
+ * Phase is driven exclusively by the SSE `event:` line — data can be any shape.
+ *
  * @example
  * ```typescript
- * interface MyUpdate {
- *   phase: 'processing' | 'complete' | 'error'
- *   result?: MyResult
- *   error?: string
- * }
- *
  * function MyComponent() {
- *   const { state, start, cancel, reset } = useSSEStream<MyInput, MyResult, MyUpdate>({
+ *   const { state, start, cancel, reset } = useSSEStream<MyInput, MyResult>({
  *     endpoint: '/api/my-stream',
- *     onUpdate: (update) => {
- *       if (update.phase === 'complete') {
- *         console.log('Done:', update.result)
+ *     initialEvent: 'idle',
+ *     completeEvent: 'complete',
+ *     errorEvent: 'error',
+ *     onUpdate: (event, data) => {
+ *       if (event === 'stage') {
+ *         console.log('Stage:', data)
  *       }
  *     }
  *   })
@@ -26,7 +25,7 @@
  *     <div>
  *       <button onClick={() => start({ query: 'test' })}>Start</button>
  *       <button onClick={cancel} disabled={!state.isStreaming}>Cancel</button>
- *       <p>Phase: {state.phase}</p>
+ *       <p>Event: {state.event}</p>
  *       {state.error && <p>Error: {state.error}</p>}
  *     </div>
  *   )
@@ -43,9 +42,8 @@ import { DEFAULT_RETRY_CONFIG } from '../types/stream-config'
 /**
  * Generic stream state shape.
  */
-export interface SSEStreamState<TPhase extends string, TResult> {
-  phase: TPhase
-  phaseMessage: string | null
+export interface SSEStreamState<TEvent extends string, TResult> {
+  event: TEvent
   result: TResult | null
   error: string | null
   isStreaming: boolean
@@ -61,9 +59,9 @@ export interface ReconnectionInfo {
 /**
  * Actions for the stream reducer.
  */
-type StreamAction<TPhase extends string, TResult> =
-  | { type: 'START'; payload: { phase: TPhase } }
-  | { type: 'UPDATE_PHASE'; payload: { phase: TPhase; message?: string } }
+type StreamAction<TEvent extends string, TResult> =
+  | { type: 'START'; payload: { event: TEvent } }
+  | { type: 'UPDATE_EVENT'; payload: { event: TEvent } }
   | { type: 'SET_RECONNECTION'; payload: ReconnectionInfo }
   | { type: 'SET_RESULT'; payload: { result: TResult } }
   | { type: 'SET_ERROR'; payload: { error: string } }
@@ -81,32 +79,30 @@ export interface SSEConnectionConfig<TInput> {
 }
 
 /**
- * Phase lifecycle - state machine configuration.
+ * Event lifecycle - state machine configuration.
  */
-export interface SSEPhaseConfig<TPhase extends string> {
-  initialPhase: TPhase
-  completePhase: TPhase
-  errorPhase: TPhase
-  reconnectingPhase?: TPhase
+export interface SSEEventConfig<TEvent extends string> {
+  initialEvent: TEvent
+  completeEvent: TEvent
+  errorEvent: TEvent
+  reconnectingEvent?: TEvent
 }
 
 /**
  * Stream callbacks - side effects on stream events.
  */
 export interface SSEStreamCallbacks<TResult, TUpdate> {
-  onUpdate?: (update: TUpdate) => void
+  onUpdate?: (event: string | undefined, data: TUpdate) => void
   onComplete?: (result: TResult) => void
   onError?: (error: string) => void
 }
 
 /**
- * Custom parsing - for non-standard update shapes.
+ * Custom parsing - extract result/error from data payloads.
  */
 export interface SSEParseConfig<TResult, TUpdate> {
-  extractResult?: (update: TUpdate) => TResult | undefined
-  extractError?: (update: TUpdate) => string | undefined
-  isComplete?: (update: TUpdate) => boolean
-  isError?: (update: TUpdate) => boolean
+  extractResult?: (data: TUpdate) => TResult | undefined
+  extractError?: (data: TUpdate) => string | undefined
 }
 
 /**
@@ -126,18 +122,17 @@ export interface SSEBrowserConfig {
 /**
  * Full options for useSSEStream hook.
  */
-export type UseSSEStreamOptions<TInput, TResult, TUpdate, TPhase extends string> =
+export type UseSSEStreamOptions<TInput, TResult, TUpdate, TEvent extends string> =
   SSEConnectionConfig<TInput> &
-  SSEPhaseConfig<TPhase> &
+  SSEEventConfig<TEvent> &
   SSEStreamCallbacks<TResult, TUpdate> &
   SSEParseConfig<TResult, TUpdate> &
   SSEResilienceConfig &
   SSEBrowserConfig
 
-function createReducer<TPhase extends string, TResult>(initialPhase: TPhase) {
-  const initialState: SSEStreamState<TPhase, TResult> = {
-    phase: initialPhase,
-    phaseMessage: null,
+function createReducer<TEvent extends string, TResult>(initialEvent: TEvent) {
+  const initialState: SSEStreamState<TEvent, TResult> = {
+    event: initialEvent,
     result: null,
     error: null,
     isStreaming: false,
@@ -145,22 +140,21 @@ function createReducer<TPhase extends string, TResult>(initialPhase: TPhase) {
   }
 
   return function reducer(
-    state: SSEStreamState<TPhase, TResult>,
-    action: StreamAction<TPhase, TResult>
-  ): SSEStreamState<TPhase, TResult> {
+    state: SSEStreamState<TEvent, TResult>,
+    action: StreamAction<TEvent, TResult>
+  ): SSEStreamState<TEvent, TResult> {
     switch (action.type) {
       case 'START':
         return {
           ...initialState,
-          phase: action.payload.phase,
+          event: action.payload.event,
           isStreaming: true,
         }
-      case 'UPDATE_PHASE':
+      case 'UPDATE_EVENT':
         return {
           ...state,
-          phase: action.payload.phase,
-          phaseMessage: action.payload.message ?? state.phaseMessage,
-          reconnectionInfo: null, // Clear reconnection on successful update
+          event: action.payload.event,
+          reconnectionInfo: null,
         }
       case 'SET_RECONNECTION':
         return {
@@ -194,38 +188,31 @@ function createReducer<TPhase extends string, TResult>(initialPhase: TPhase) {
 
 /**
  * Generic React hook for SSE streaming.
+ *
+ * Event-driven: the SSE `event:` line drives state transitions.
+ * Data can be any shape — no TUpdate constraint.
  */
 export function useSSEStream<
   TInput,
   TResult,
-  TUpdate extends { phase: TPhase; message?: string; result?: TResult; error?: string },
-  TPhase extends string = string
->(options: UseSSEStreamOptions<TInput, TResult, TUpdate, TPhase>) {
+  TUpdate = unknown,
+  TEvent extends string = string
+>(options: UseSSEStreamOptions<TInput, TResult, TUpdate, TEvent>) {
   const {
     endpoint,
     method = 'POST',
-    initialPhase,
-    completePhase,
-    errorPhase,
-    reconnectingPhase,
-    headers = {},
-    retry = {},
-    onUpdate,
-    onComplete,
-    onError,
-    extractResult = (update) => update.result,
-    extractError = (update) => update.error,
-    isComplete = (update) => update.phase === completePhase,
-    isError = (update) => update.phase === errorPhase,
+    initialEvent,
+    completeEvent,
+    errorEvent,
+    reconnectingEvent,
     streamQueryParam = true,
     warnOnUnload = true,
   } = options
 
-  const retryConfig: RetryConfig = { ...DEFAULT_RETRY_CONFIG, ...retry }
-  const reducer = createReducer<TPhase, TResult>(initialPhase)
+  const retryConfig: RetryConfig = { ...DEFAULT_RETRY_CONFIG, ...(options.retry ?? {}) }
+  const reducer = createReducer<TEvent, TResult>(initialEvent)
   const [state, dispatch] = useReducer(reducer, {
-    phase: initialPhase,
-    phaseMessage: null,
+    event: initialEvent,
     result: null,
     error: null,
     isStreaming: false,
@@ -234,29 +221,44 @@ export function useSSEStream<
 
   const abortControllerRef = useRef<AbortController | null>(null)
 
+  // Store all callback/object options in a ref to stabilize `start` identity
+  const optionsRef = useRef(options)
+  optionsRef.current = options
+
   const start = useCallback(async (input: TInput): Promise<TResult | undefined> => {
+    const currentOptions = optionsRef.current
+    const headers = currentOptions.headers ?? {}
+
+    // Smart defaults
+    const extractResult = currentOptions.extractResult ?? ((data: TUpdate) => data as unknown as TResult | undefined)
+    const extractError = currentOptions.extractError ?? ((data: TUpdate) => {
+      const record = data as Record<string, unknown>
+      const message = record.error ?? record.message ?? record.detail
+      return typeof message === 'string' ? message : undefined
+    })
+
     // Abort any existing stream
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
 
-    dispatch({ type: 'START', payload: { phase: initialPhase } })
+    dispatch({ type: 'START', payload: { event: initialEvent } })
 
     const reconnect = createReconnectionManager({
       config: retryConfig,
-      onReconnecting: (event) => {
-        if (reconnectingPhase) {
+      onReconnecting: (reconnectEvent) => {
+        if (reconnectingEvent) {
           dispatch({
-            type: 'UPDATE_PHASE',
-            payload: { phase: reconnectingPhase },
+            type: 'UPDATE_EVENT',
+            payload: { event: reconnectingEvent },
           })
         }
         dispatch({
           type: 'SET_RECONNECTION',
           payload: {
-            attempt: event.attempt,
-            maxAttempts: event.maxAttempts,
-            retryDelayMs: event.delayMs,
+            attempt: reconnectEvent.attempt,
+            maxAttempts: reconnectEvent.maxAttempts,
+            retryDelayMs: reconnectEvent.delayMs,
           },
         })
       },
@@ -289,30 +291,32 @@ export function useSSEStream<
         let finalResult: TResult | undefined
 
         const parser = createSSEParser<TUpdate>({
-          onMessage: (update) => {
-            onUpdate?.(update)
+          onMessage: (event, data) => {
+            // Protocol layer: event: line drives state
+            const eventType = event as TEvent | undefined
 
-            // Update phase
-            dispatch({
-              type: 'UPDATE_PHASE',
-              payload: { phase: update.phase, message: update.message },
-            })
+            if (eventType) {
+              dispatch({ type: 'UPDATE_EVENT', payload: { event: eventType } })
+            }
 
-            // Handle completion
-            if (isComplete(update)) {
-              const result = extractResult(update)
+            // Pass raw data to consumer — event first
+            currentOptions.onUpdate?.(event, data)
+
+            // Lifecycle: completion
+            if (eventType === completeEvent) {
+              const result = extractResult(data)
               if (result !== undefined) {
                 finalResult = result
                 dispatch({ type: 'SET_RESULT', payload: { result } })
-                onComplete?.(result)
+                currentOptions.onComplete?.(result)
               }
             }
 
-            // Handle error
-            if (isError(update)) {
-              const error = extractError(update) || 'Unknown error'
+            // Lifecycle: error (terminal)
+            if (eventType === errorEvent) {
+              const error = extractError(data) || 'Unknown error'
               dispatch({ type: 'SET_ERROR', payload: { error } })
-              onError?.(error)
+              currentOptions.onError?.(error)
               throw new Error(error)
             }
           },
@@ -341,30 +345,14 @@ export function useSSEStream<
 
       const errorMessage = error instanceof Error ? error.message : 'Stream failed'
       dispatch({ type: 'SET_ERROR', payload: { error: errorMessage } })
-      onError?.(errorMessage)
+      currentOptions.onError?.(errorMessage)
       throw error
     } finally {
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null
       }
     }
-  }, [
-    endpoint,
-    method,
-    headers,
-    initialPhase,
-    completePhase,
-    reconnectingPhase,
-    retryConfig,
-    streamQueryParam,
-    onUpdate,
-    onComplete,
-    onError,
-    extractResult,
-    extractError,
-    isComplete,
-    isError,
-  ])
+  }, [endpoint, method, initialEvent, completeEvent, errorEvent, reconnectingEvent, streamQueryParam, retryConfig])
 
   const cancel = useCallback(() => {
     abortControllerRef.current?.abort()

@@ -14,6 +14,12 @@ Server-Sent Events streaming for TypeScript. Zero dependencies. Works with Next.
 - **React hook** — full lifecycle management with retry support
 - **Tree-shakeable** — import only what you need
 
+## Design Philosophy
+
+`event:` = protocol (stream lifecycle). `data:` = application (your data, any shape).
+
+sse-kit is a pure transport layer. The SSE `event:` line drives state transitions. The `data:` line carries your payload — no wrappers, no reshaping. What you send is what you get.
+
 ## Install
 
 ```bash
@@ -30,12 +36,13 @@ import { createStreamingResponse, createSSEResponse } from '@agenisea/sse-kit/se
 export async function POST(request: Request) {
   const { stream, orchestrator } = createStreamingResponse({
     signal: request.signal,
+    heartbeat: { intervalMs: 3000, enabled: true }, // default: 5000ms
   })
 
   ;(async () => {
     orchestrator.startHeartbeat()
-    await orchestrator.sendProgress('processing', 'Working...')
-    await orchestrator.sendResult({ done: true })
+    await orchestrator.sendUpdate('stage', { name: 'parsing', status: 'running' })
+    await orchestrator.sendData({ sections: 12, title: 'Report' })
     await orchestrator.close()
   })()
 
@@ -51,7 +58,13 @@ import { useSSEStream } from '@agenisea/sse-kit/client'
 function App() {
   const { state, start, cancel } = useSSEStream({
     endpoint: '/api/stream',
-    onComplete: (result) => console.log(result),
+    initialEvent: 'idle',
+    completeEvent: 'complete',
+    errorEvent: 'error',
+    onUpdate: (event, data) => {
+      if (event === 'stage') console.log('Stage:', data)
+    },
+    onComplete: (result) => console.log('Done:', result),
   })
 
   return (
@@ -74,8 +87,8 @@ MIT
 
 ---
 
-*Built by [Agenisea™](https://agenisea.ai)*
+*Built by [Agenisea](https://agenisea.ai)*
 
 ---
 
-© 2025 Patrick Peña / Agenisea™
+&copy; 2025-2026 Patrick Pena / Agenisea

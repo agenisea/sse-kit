@@ -7,45 +7,96 @@ import {
 } from '../src/client/sse-parser'
 
 describe('createSSEParser', () => {
-  it('parses single complete message', () => {
+  it('parses single complete message (no event line)', () => {
     const onMessage = vi.fn()
     const parser = createSSEParser({ onMessage })
 
     parser('data: {"phase":"test"}\n\n')
 
-    expect(onMessage).toHaveBeenCalledWith({ phase: 'test' })
+    expect(onMessage).toHaveBeenCalledWith(undefined, { phase: 'test' })
   })
 
-  it('parses multiple messages in one chunk', () => {
+  it('passes event: line as first arg to onMessage', () => {
     const onMessage = vi.fn()
     const parser = createSSEParser({ onMessage })
 
-    parser('data: {"phase":"first"}\n\ndata: {"phase":"second"}\n\n')
+    parser('event: stage\ndata: {"name":"parsing"}\n\n')
+
+    expect(onMessage).toHaveBeenCalledWith('stage', { name: 'parsing' })
+  })
+
+  it('parses multiple messages with different event types', () => {
+    const onMessage = vi.fn()
+    const parser = createSSEParser({ onMessage })
+
+    parser('event: stage\ndata: {"name":"a"}\n\nevent: complete\ndata: {"ok":true}\n\n')
 
     expect(onMessage).toHaveBeenCalledTimes(2)
-    expect(onMessage).toHaveBeenNthCalledWith(1, { phase: 'first' })
-    expect(onMessage).toHaveBeenNthCalledWith(2, { phase: 'second' })
+    expect(onMessage).toHaveBeenNthCalledWith(1, 'stage', { name: 'a' })
+    expect(onMessage).toHaveBeenNthCalledWith(2, 'complete', { ok: true })
+  })
+
+  it('resets event between message blocks', () => {
+    const onMessage = vi.fn()
+    const parser = createSSEParser({ onMessage })
+
+    parser('event: stage\ndata: {"name":"a"}\n\ndata: {"name":"b"}\n\n')
+
+    expect(onMessage).toHaveBeenNthCalledWith(1, 'stage', { name: 'a' })
+    expect(onMessage).toHaveBeenNthCalledWith(2, undefined, { name: 'b' })
+  })
+
+  it('mixed: some messages with event, some without', () => {
+    const onMessage = vi.fn()
+    const parser = createSSEParser({ onMessage })
+
+    parser('data: {"x":1}\n\nevent: foo\ndata: {"x":2}\n\ndata: {"x":3}\n\n')
+
+    expect(onMessage).toHaveBeenCalledTimes(3)
+    expect(onMessage).toHaveBeenNthCalledWith(1, undefined, { x: 1 })
+    expect(onMessage).toHaveBeenNthCalledWith(2, 'foo', { x: 2 })
+    expect(onMessage).toHaveBeenNthCalledWith(3, undefined, { x: 3 })
+  })
+
+  it('event: without data: does not fire onMessage', () => {
+    const onMessage = vi.fn()
+    const parser = createSSEParser({ onMessage })
+
+    parser('event: orphan\n\ndata: {"ok":true}\n\n')
+
+    expect(onMessage).toHaveBeenCalledTimes(1)
+    expect(onMessage).toHaveBeenCalledWith(undefined, { ok: true })
   })
 
   it('handles chunked messages across multiple calls', () => {
     const onMessage = vi.fn()
     const parser = createSSEParser({ onMessage })
 
-    parser('data: {"pha')
+    parser('event: stage\ndata: {"pha')
     expect(onMessage).not.toHaveBeenCalled()
 
     parser('se":"test"}\n\n')
-    expect(onMessage).toHaveBeenCalledWith({ phase: 'test' })
+    expect(onMessage).toHaveBeenCalledWith('stage', { phase: 'test' })
   })
 
-  it('skips SSE comments (heartbeats)', () => {
+  it('calls onComment for comment lines', () => {
+    const onMessage = vi.fn()
+    const onComment = vi.fn()
+    const parser = createSSEParser({ onMessage, onComment })
+
+    parser(': heartbeat\n\ndata: {"ok":true}\n\n')
+
+    expect(onComment).toHaveBeenCalledWith('heartbeat')
+    expect(onMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not error when onComment is not provided', () => {
     const onMessage = vi.fn()
     const parser = createSSEParser({ onMessage })
 
-    parser(': [heartbeat]\n\ndata: {"phase":"test"}\n\n')
+    parser(': heartbeat\n\ndata: {"ok":true}\n\n')
 
     expect(onMessage).toHaveBeenCalledTimes(1)
-    expect(onMessage).toHaveBeenCalledWith({ phase: 'test' })
   })
 
   it('handles JSON parse errors gracefully', () => {
@@ -76,16 +127,13 @@ describe('createSSEParser', () => {
     const parser = createSSEParser({ onMessage })
 
     const complexData = {
-      phase: 'complete',
-      result: {
-        items: [1, 2, 3],
-        nested: { key: 'value' },
-      },
+      sections: 12,
+      nested: { key: 'value' },
     }
 
-    parser(`data: ${JSON.stringify(complexData)}\n\n`)
+    parser(`event: complete\ndata: ${JSON.stringify(complexData)}\n\n`)
 
-    expect(onMessage).toHaveBeenCalledWith(complexData)
+    expect(onMessage).toHaveBeenCalledWith('complete', complexData)
   })
 })
 

@@ -1,5 +1,24 @@
 # API Reference
 
+## Wire Format
+
+sse-kit follows the SSE specification. All messages use `event:` + `data:` format on the wire:
+
+```
+event: stage
+data: {"name":"parsing","status":"running"}
+
+event: complete
+data: {"sections":12,"title":"Report"}
+
+event: error
+data: {"error":"Something went wrong"}
+```
+
+`event:` drives the protocol layer (stream lifecycle). `data:` carries application data (any shape).
+
+---
+
 ## Server (`@agenisea/sse-kit/server`)
 
 ### `createStreamingResponse(config?)`
@@ -11,11 +30,13 @@ import { createStreamingResponse, createSSEResponse } from '@agenisea/sse-kit/se
 
 const { stream, orchestrator } = createStreamingResponse({
   signal: request.signal,           // AbortSignal for cancellation
+  completeEvent: 'complete',        // Event type for completion (default: 'complete')
+  errorEvent: 'error',              // Event type for errors (default: 'error')
   heartbeat: { intervalMs: 5000 },  // Heartbeat config
   observer: {                       // Observability hooks
     onStreamStart: () => {},
     onStreamEnd: (durationMs, success, error) => {},
-    onUpdateSent: (phase, bytesSent) => {},
+    onUpdateSent: (event, bytesSent) => {},
     onAbort: (reason) => {},
   },
 })
@@ -23,25 +44,55 @@ const { stream, orchestrator } = createStreamingResponse({
 return createSSEResponse(stream)
 ```
 
-### `StreamOrchestrator`
+### `StreamOrchestrator<TData = unknown>`
 
 | Method | Description |
 |--------|-------------|
-| `sendUpdate(update)` | Send a generic update |
-| `sendProgress(phase, message?)` | Send phase progress |
-| `sendResult(result)` | Send final result |
-| `sendError(error, extra?)` | Send error |
-| `sendEvent(type, data)` | Send typed SSE event |
-| `startHeartbeat()` | Start periodic heartbeat |
+| `sendUpdate(eventType, data)` | Send an SSE message: `event: <eventType>\ndata: <JSON>\n\n` |
+| `sendData(data)` | Send data with the configured complete event type |
+| `sendError(error, extra?)` | Send error with the configured error event type |
+| `startHeartbeat()` | Start periodic heartbeat comments |
 | `stopHeartbeat()` | Stop heartbeat interval |
-| `abort(reason?)` | Abort the stream |
-| `close()` | Close the stream |
-| `getMetrics()` | Get stream metrics |
+| `abort(reason?)` | Abort the stream programmatically |
+| `close()` | Close the stream safely |
+| `getMetrics()` | Get stream metrics (durationMs, bytesSent, closed, aborted) |
 
 | Property | Description |
 |----------|-------------|
 | `closed` | Whether stream is closed |
 | `aborted` | Whether stream was aborted |
+
+The `TData` generic is unconstrained with opt-in type safety:
+
+```typescript
+// Dynamic — data is unknown
+const { orchestrator } = createStreamingResponse()
+await orchestrator.sendUpdate('stage', { anything: true })
+
+// Typed — compile-time checking
+const { orchestrator } = createStreamingResponse<StagePayload>()
+await orchestrator.sendUpdate('stage', { name: 'parsing' }) // type-checked
+```
+
+### Heartbeat Configuration
+
+Heartbeats send SSE comment lines (`: [heartbeat]\n\n`) to keep connections alive against browser/proxy timeouts. The consumer controls the interval and when heartbeats start:
+
+```typescript
+const { stream, orchestrator } = createStreamingResponse({
+  heartbeat: {
+    intervalMs: 3000,    // default: 5000
+    enabled: true,       // default: true
+    message: 'heartbeat' // default: 'heartbeat'
+  },
+})
+
+orchestrator.startHeartbeat()  // begins sending at configured interval
+// ... long-running work ...
+orchestrator.stopHeartbeat()   // manual stop (also stops on close/abort)
+```
+
+Setting `enabled: false` makes `startHeartbeat()` a no-op. If your pipeline is fast (< 5s), you can skip calling `startHeartbeat()` entirely.
 
 ### `StreamObserver`
 
@@ -57,7 +108,7 @@ const observer: StreamObserver = {
   onStreamEnd: (durationMs, success, error) => {
     // Called when stream closes (success or error)
   },
-  onUpdateSent: (phase, bytesSent) => {
+  onUpdateSent: (event, bytesSent) => {
     // Called on each update sent
   },
   onHeartbeat: () => {
@@ -102,19 +153,35 @@ const { state, start, cancel, reset, isStreaming } = useSSEStream({
   method: 'POST',
   headers: { 'X-Custom': 'value' },
 
-  // Phase lifecycle
-  initialPhase: 'idle',
-  completePhase: 'complete',
-  errorPhase: 'error',
+  // Event lifecycle
+  initialEvent: 'idle',
+  completeEvent: 'complete',
+  errorEvent: 'error',
 
   // Callbacks
-  onUpdate: (update) => {},
+  onUpdate: (event, data) => {},
   onComplete: (result) => {},
   onError: (error) => {},
+
+  // Custom extraction (optional — smart defaults provided)
+  extractResult: (data) => data,
+  extractError: (data) => data.error,
 
   // Resilience
   retry: { maxRetries: 3 },
 })
+```
+
+#### State
+
+```typescript
+interface SSEStreamState<TEvent, TResult> {
+  event: TEvent          // Current event (from event: line)
+  result: TResult | null // Final result (set on completeEvent)
+  error: string | null   // Error message (set on errorEvent)
+  isStreaming: boolean    // Whether stream is active
+  reconnectionInfo: ReconnectionInfo | null
+}
 ```
 
 #### Options interfaces
@@ -122,12 +189,36 @@ const { state, start, cancel, reset, isStreaming } = useSSEStream({
 ```typescript
 import type {
   SSEConnectionConfig,  // endpoint, method, headers, streamQueryParam
-  SSEPhaseConfig,       // initialPhase, completePhase, errorPhase, reconnectingPhase
+  SSEEventConfig,       // initialEvent, completeEvent, errorEvent, reconnectingEvent
   SSEStreamCallbacks,   // onUpdate, onComplete, onError
-  SSEParseConfig,       // extractResult, extractError, isComplete, isError
+  SSEParseConfig,       // extractResult, extractError
   SSEResilienceConfig,  // retry
   SSEBrowserConfig,     // warnOnUnload
 } from '@agenisea/sse-kit/client'
+```
+
+### `createSSEParser(options)`
+
+Low-level stateful SSE parser for chunked streams.
+
+```typescript
+import { createSSEParser } from '@agenisea/sse-kit/client'
+
+const parser = createSSEParser({
+  onMessage: (event, data) => {
+    // event: string | undefined — from event: line
+    // data: T — parsed JSON from data: line
+  },
+  onComment: (text) => {
+    // Optional — called for : comment lines
+  },
+  onError: (error, rawLine) => {
+    // Optional — called on parse errors
+  },
+})
+
+// Feed chunks as they arrive
+parser(chunk)
 ```
 
 ### `createCircuitBreaker(options)`
@@ -177,15 +268,17 @@ const response = await withRetry(() => fetch('/api/stream'), {
 
 ```typescript
 import type {
-  SSEUpdate,
-  SSEMessage,
-  SSEMetadata,
+  SSEMessage,           // { id?, event?, data, retry? }
+  SSEUpdate,            // Optional convenience type (not enforced)
+  SSEMetadata,          // Record<string, unknown>
   RetryConfig,
   TimeoutConfig,
   HeartbeatConfig,
   CircuitBreakerConfig,
 } from '@agenisea/sse-kit/types'
 ```
+
+`BaseSSEUpdate` and `SSEUpdate` are optional convenience types for consumers who want a structured data shape. They are **not enforced** by `useSSEStream` or `StreamOrchestrator`.
 
 ---
 

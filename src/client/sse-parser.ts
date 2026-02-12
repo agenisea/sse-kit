@@ -25,8 +25,11 @@ export interface SSEEventHandlers<T = unknown> {
  * Options for the stateful SSE parser.
  */
 export interface SSEParserOptions<T = unknown> {
-  /** Called for each parsed message (raw data: lines) */
-  onMessage: (data: T) => void
+  /** Called for each parsed message — event first, because it's Server-Sent *Events* */
+  onMessage: (event: string | undefined, data: T) => void
+
+  /** Called for SSE comment lines (`: text`) */
+  onComment?: (text: string) => void
 
   /** Called when JSON parsing fails */
   onError?: (error: Error, rawLine: string) => void
@@ -39,8 +42,11 @@ export interface SSEParserOptions<T = unknown> {
  * @example
  * ```typescript
  * const parser = createSSEParser<MyUpdateType>({
- *   onMessage: (update) => {
- *     console.log('Update:', update)
+ *   onMessage: (event, data) => {
+ *     console.log('Event:', event, 'Data:', data)
+ *   },
+ *   onComment: (text) => {
+ *     console.log('Comment:', text)
  *   },
  *   onError: (err, raw) => {
  *     console.warn('Parse error:', err, raw)
@@ -58,7 +64,7 @@ export interface SSEParserOptions<T = unknown> {
  * ```
  */
 export function createSSEParser<T = unknown>(options: SSEParserOptions<T>) {
-  const { onMessage, onError } = options
+  const { onMessage, onComment, onError } = options
   let buffer = ''
 
   return function parse(chunk: string): void {
@@ -70,15 +76,25 @@ export function createSSEParser<T = unknown>(options: SSEParserOptions<T>) {
       const trimmed = message.trim()
       if (!trimmed) continue // Skip empty
 
+      let currentEvent: string | undefined
       for (const line of trimmed.split('\n')) {
-        // Skip SSE comments (heartbeats use `: message`)
-        if (line.startsWith(':')) continue
+        // SSE comment lines (`: text`)
+        if (line.startsWith(':')) {
+          onComment?.(line.slice(1).trimStart())
+          continue
+        }
+
+        // Track event: lines within this message block
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7)
+          continue
+        }
 
         if (line.startsWith('data: ')) {
           const payload = line.slice(6)
           try {
             const data = JSON.parse(payload) as T
-            onMessage(data)
+            onMessage(currentEvent, data)
           } catch (err) {
             onError?.(
               err instanceof Error ? err : new Error('JSON parse error'),
@@ -87,6 +103,7 @@ export function createSSEParser<T = unknown>(options: SSEParserOptions<T>) {
           }
         }
       }
+      // Event resets at block boundary (next message gets its own event)
     }
   }
 }

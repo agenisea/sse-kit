@@ -26,22 +26,22 @@ describe('StreamOrchestrator', () => {
   })
 
   describe('sendUpdate', () => {
-    it('sends JSON-formatted SSE data', async () => {
+    it('sends event: + data: SSE format', async () => {
       const enqueueSpy = vi.spyOn(controller, 'enqueue')
 
-      await orchestrator.sendUpdate({ phase: 'test', message: 'Hello' })
+      await orchestrator.sendUpdate('stage', { name: 'parsing', status: 'running' })
 
       expect(enqueueSpy).toHaveBeenCalled()
       const encoded = enqueueSpy.mock.calls[0][0] as Uint8Array
       const decoded = new TextDecoder().decode(encoded)
-      expect(decoded).toBe('data: {"phase":"test","message":"Hello"}\n\n')
+      expect(decoded).toBe('event: stage\ndata: {"name":"parsing","status":"running"}\n\n')
     })
 
     it('skips update when stream is closed', async () => {
       const enqueueSpy = vi.spyOn(controller, 'enqueue')
 
       await orchestrator.close()
-      await orchestrator.sendUpdate({ phase: 'test' })
+      await orchestrator.sendUpdate('stage', { name: 'test' })
 
       expect(enqueueSpy).not.toHaveBeenCalled()
     })
@@ -52,62 +52,58 @@ describe('StreamOrchestrator', () => {
       })
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
-      await orchestrator.sendUpdate({ phase: 'test' })
+      await orchestrator.sendUpdate('stage', { name: 'test' })
 
       expect(orchestrator.closed).toBe(true)
       logSpy.mockRestore()
     })
   })
 
-  describe('sendProgress', () => {
-    it('sends progress update with phase', async () => {
+  describe('sendData', () => {
+    it('sends data with configured complete event', async () => {
       const enqueueSpy = vi.spyOn(controller, 'enqueue')
 
-      await orchestrator.sendProgress('processing', 'Working...')
+      await orchestrator.sendData({ sections: 12, title: 'Report' })
 
       const encoded = enqueueSpy.mock.calls[0][0] as Uint8Array
       const decoded = new TextDecoder().decode(encoded)
-      expect(decoded).toContain('"phase":"processing"')
-      expect(decoded).toContain('"message":"Working..."')
+      expect(decoded).toBe('event: complete\ndata: {"sections":12,"title":"Report"}\n\n')
     })
-  })
 
-  describe('sendResult', () => {
-    it('sends result with complete phase', async () => {
-      const enqueueSpy = vi.spyOn(controller, 'enqueue')
+    it('uses custom complete event when configured', async () => {
+      const { stream, orchestrator: customOrchestrator } = createStreamingResponse({
+        completeEvent: 'done',
+      })
 
-      await orchestrator.sendResult({ data: 'success' })
+      await customOrchestrator.sendData({ result: 'ok' })
+      await customOrchestrator.close()
 
-      const encoded = enqueueSpy.mock.calls[0][0] as Uint8Array
-      const decoded = new TextDecoder().decode(encoded)
-      expect(decoded).toContain('"phase":"complete"')
-      expect(decoded).toContain('"result":{"data":"success"}')
+      const reader = stream.getReader()
+      const { value } = await reader.read()
+      const decoded = new TextDecoder().decode(value)
+      expect(decoded).toBe('event: done\ndata: {"result":"ok"}\n\n')
     })
   })
 
   describe('sendError', () => {
-    it('sends error update', async () => {
+    it('sends error with configured error event', async () => {
       const enqueueSpy = vi.spyOn(controller, 'enqueue')
 
       await orchestrator.sendError('Something went wrong', { code: 'ERR_001' })
 
       const encoded = enqueueSpy.mock.calls[0][0] as Uint8Array
       const decoded = new TextDecoder().decode(encoded)
-      expect(decoded).toContain('"phase":"error"')
-      expect(decoded).toContain('"error":"Something went wrong"')
-      expect(decoded).toContain('"code":"ERR_001"')
+      expect(decoded).toBe('event: error\ndata: {"error":"Something went wrong","code":"ERR_001"}\n\n')
     })
-  })
 
-  describe('sendEvent', () => {
-    it('sends typed SSE event', async () => {
+    it('sends error without extra fields', async () => {
       const enqueueSpy = vi.spyOn(controller, 'enqueue')
 
-      await orchestrator.sendEvent('custom', { value: 42 })
+      await orchestrator.sendError('Failed')
 
       const encoded = enqueueSpy.mock.calls[0][0] as Uint8Array
       const decoded = new TextDecoder().decode(encoded)
-      expect(decoded).toBe('event: custom\ndata: {"value":42}\n\n')
+      expect(decoded).toBe('event: error\ndata: {"error":"Failed"}\n\n')
     })
   })
 
@@ -155,29 +151,23 @@ describe('StreamOrchestrator', () => {
         onError: vi.fn(),
       }
 
-      new ReadableStream<Uint8Array>({
-        start(ctrl) {
-          const obs = new StreamOrchestrator(ctrl, { observer })
+      const { orchestrator: observed } = createStreamingResponse({ observer })
 
-          expect(observer.onStreamStart).toHaveBeenCalled()
+      expect(observer.onStreamStart).toHaveBeenCalled()
 
-          obs.sendUpdate({ phase: 'test' }).then(() => {
-            expect(observer.onUpdateSent).toHaveBeenCalledWith('test', expect.any(Number))
+      await observed.sendUpdate('stage', { name: 'test' })
+      expect(observer.onUpdateSent).toHaveBeenCalledWith('stage', expect.any(Number))
 
-            obs.close().then(() => {
-              expect(observer.onStreamEnd).toHaveBeenCalledWith(
-                expect.any(Number),
-                true,
-                undefined
-              )
-            })
-          })
-        },
-      })
+      await observed.close()
+      expect(observer.onStreamEnd).toHaveBeenCalledWith(
+        expect.any(Number),
+        true,
+        undefined
+      )
     })
 
     it('tracks metrics', async () => {
-      await orchestrator.sendUpdate({ phase: 'test' })
+      await orchestrator.sendUpdate('stage', { name: 'test' })
 
       const metrics = orchestrator.getMetrics()
       expect(metrics.bytesSent).toBeGreaterThan(0)
@@ -196,7 +186,7 @@ describe('StreamOrchestrator', () => {
       expect(orchestrator.closed).toBe(true)
       expect(orchestrator.aborted).toBe(true)
 
-      await orchestrator.sendUpdate({ phase: 'test' })
+      await orchestrator.sendUpdate('stage', { name: 'test' })
       expect(enqueueSpy).not.toHaveBeenCalled()
     })
 
@@ -204,23 +194,18 @@ describe('StreamOrchestrator', () => {
       const abortController = new AbortController()
       const onStreamEnd = vi.fn()
 
-      let testOrchestrator: StreamOrchestrator
-      new ReadableStream<Uint8Array>({
-        start(ctrl) {
-          testOrchestrator = new StreamOrchestrator(ctrl, {
-            signal: abortController.signal,
-            observer: { onStreamEnd },
-          })
-        },
+      const { orchestrator: testOrchestrator } = createStreamingResponse({
+        signal: abortController.signal,
+        observer: { onStreamEnd },
       })
 
-      expect(testOrchestrator!.closed).toBe(false)
-      expect(testOrchestrator!.aborted).toBe(false)
+      expect(testOrchestrator.closed).toBe(false)
+      expect(testOrchestrator.aborted).toBe(false)
 
       abortController.abort()
 
-      expect(testOrchestrator!.closed).toBe(true)
-      expect(testOrchestrator!.aborted).toBe(true)
+      expect(testOrchestrator.closed).toBe(true)
+      expect(testOrchestrator.aborted).toBe(true)
       expect(onStreamEnd).toHaveBeenCalledWith(
         expect.any(Number),
         false,
@@ -232,17 +217,12 @@ describe('StreamOrchestrator', () => {
       const abortController = new AbortController()
       abortController.abort()
 
-      let testOrchestrator: StreamOrchestrator
-      new ReadableStream<Uint8Array>({
-        start(ctrl) {
-          testOrchestrator = new StreamOrchestrator(ctrl, {
-            signal: abortController.signal,
-          })
-        },
+      const { orchestrator: testOrchestrator } = createStreamingResponse({
+        signal: abortController.signal,
       })
 
-      expect(testOrchestrator!.closed).toBe(true)
-      expect(testOrchestrator!.aborted).toBe(true)
+      expect(testOrchestrator.closed).toBe(true)
+      expect(testOrchestrator.aborted).toBe(true)
     })
 
     it('stops heartbeat on abort', async () => {
@@ -272,16 +252,11 @@ describe('StreamOrchestrator', () => {
       const onAbort = vi.fn()
       const onStreamEnd = vi.fn()
 
-      let testOrchestrator: StreamOrchestrator
-      new ReadableStream<Uint8Array>({
-        start(ctrl) {
-          testOrchestrator = new StreamOrchestrator(ctrl, {
-            observer: { onAbort, onStreamEnd },
-          })
-        },
+      const { orchestrator: testOrchestrator } = createStreamingResponse({
+        observer: { onAbort, onStreamEnd },
       })
 
-      testOrchestrator!.abort('User requested cancellation')
+      testOrchestrator.abort('User requested cancellation')
 
       expect(onAbort).toHaveBeenCalledWith('User requested cancellation')
       expect(onStreamEnd).toHaveBeenCalledWith(
@@ -296,13 +271,9 @@ describe('StreamOrchestrator', () => {
       const onAbort = vi.fn()
       const onStreamEnd = vi.fn()
 
-      new ReadableStream<Uint8Array>({
-        start(ctrl) {
-          new StreamOrchestrator(ctrl, {
-            signal: abortController.signal,
-            observer: { onAbort, onStreamEnd },
-          })
-        },
+      createStreamingResponse({
+        signal: abortController.signal,
+        observer: { onAbort, onStreamEnd },
       })
 
       abortController.abort()
@@ -324,6 +295,8 @@ describe('createStreamingResponse', () => {
     expect(stream).toBeInstanceOf(ReadableStream)
     expect(orchestrator).toBeDefined()
     expect(typeof orchestrator.sendUpdate).toBe('function')
+    expect(typeof orchestrator.sendData).toBe('function')
+    expect(typeof orchestrator.sendError).toBe('function')
   })
 
   it('accepts configuration', () => {

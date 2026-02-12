@@ -4,6 +4,8 @@
  * Server-side orchestration for Server-Sent Events streaming.
  * Framework-agnostic - works with any runtime that supports ReadableStream.
  *
+ * All methods use `event:` + `data:` format on the wire, matching the SSE spec.
+ *
  * @example
  * ```typescript
  * const { stream, orchestrator } = createStreamingResponse()
@@ -12,17 +14,16 @@
  * orchestrator.startHeartbeat()
  *
  * // Send updates during processing
- * await orchestrator.sendUpdate({ phase: 'processing', message: 'Working...' })
+ * await orchestrator.sendUpdate('stage', { name: 'parsing', status: 'running' })
  *
- * // Send final result
- * await orchestrator.sendResult({ data: 'complete' })
+ * // Send final data
+ * await orchestrator.sendData({ sections: 12 })
  *
  * // Return SSE response
  * return createSSEResponse(stream)
  * ```
  */
 
-import type { SSEUpdate, SSEMetadata } from '../types/sse-events'
 import type { HeartbeatConfig } from '../types/stream-config'
 import { DEFAULT_HEARTBEAT_CONFIG } from '../types/stream-config'
 
@@ -39,7 +40,7 @@ export interface StreamObserver {
   onStreamEnd?: (durationMs: number, success: boolean, error?: Error) => void
 
   /** Called on each update sent */
-  onUpdateSent?: (phase: string, bytesSent: number) => void
+  onUpdateSent?: (event: string, bytesSent: number) => void
 
   /** Called when heartbeat is sent */
   onHeartbeat?: () => void
@@ -57,11 +58,11 @@ export interface StreamObserver {
 export interface StreamOrchestratorConfig {
   heartbeat?: Partial<HeartbeatConfig>
 
-  /** Phase value to use for 'complete' events */
-  completePhase?: string
+  /** Event type to use for 'complete' events */
+  completeEvent?: string
 
-  /** Phase value to use for 'error' events */
-  errorPhase?: string
+  /** Event type to use for 'error' events */
+  errorEvent?: string
 
   /** Custom logger function */
   logger?: (message: string, ...args: unknown[]) => void
@@ -75,8 +76,8 @@ export interface StreamOrchestratorConfig {
 
 const DEFAULT_CONFIG: Required<Omit<StreamOrchestratorConfig, 'signal'>> & { signal?: AbortSignal } = {
   heartbeat: DEFAULT_HEARTBEAT_CONFIG,
-  completePhase: 'complete',
-  errorPhase: 'error',
+  completeEvent: 'complete',
+  errorEvent: 'error',
   logger: console.log,
   observer: {},
   signal: undefined,
@@ -85,8 +86,10 @@ const DEFAULT_CONFIG: Required<Omit<StreamOrchestratorConfig, 'signal'>> & { sig
 /**
  * Orchestrates Server-Sent Events streaming.
  * Pure streaming logic - no business rules, just SSE management.
+ *
+ * All methods write `event:` + `data:` format on the wire.
  */
-export class StreamOrchestrator<TUpdate extends SSEUpdate = SSEUpdate> {
+export class StreamOrchestrator<TData = unknown> {
   private encoder = new TextEncoder()
   private controller: StreamController
   private isClosed = false
@@ -162,30 +165,30 @@ export class StreamOrchestrator<TUpdate extends SSEUpdate = SSEUpdate> {
   }
 
   /**
-   * Send a streaming update to the client.
-   * Automatically handles closed stream errors gracefully.
+   * Send an SSE message with event type and data.
+   * Produces: `event: <eventType>\ndata: <JSON>\n\n`
    */
-  async sendUpdate(update: TUpdate): Promise<void> {
+  async sendUpdate(eventType: string, data: TData): Promise<void> {
     if (this.isClosed) {
-      this.config.logger('[stream-orchestrator] Stream closed, skipping update:', update.phase)
+      this.config.logger('[stream-orchestrator] Stream closed, skipping update:', eventType)
       return
     }
 
     try {
-      const data = `data: ${JSON.stringify(update)}\n\n`
-      const encoded = this.encoder.encode(data)
+      const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`
+      const encoded = this.encoder.encode(payload)
       this.controller.enqueue(encoded)
 
       // Track metrics
       this.bytesSent += encoded.length
-      this.config.observer?.onUpdateSent?.(update.phase, encoded.length)
+      this.config.observer?.onUpdateSent?.(eventType, encoded.length)
     } catch (error) {
       this.isClosed = true
       this.lastError = error instanceof Error ? error : new Error(String(error))
       this.config.observer?.onError?.(this.lastError)
 
       if (error instanceof Error && error.message?.includes('Controller is already closed')) {
-        this.config.logger('[stream-orchestrator] Stream closed by client, skipping update:', update.phase)
+        this.config.logger('[stream-orchestrator] Stream closed by client, skipping update:', eventType)
       } else {
         this.config.logger('[stream-orchestrator] Unexpected stream error:', error)
       }
@@ -193,62 +196,19 @@ export class StreamOrchestrator<TUpdate extends SSEUpdate = SSEUpdate> {
   }
 
   /**
-   * Send a progress update with just a phase.
+   * Send data with the configured complete event type.
+   * Produces: `event: <completeEvent>\ndata: <JSON>\n\n`
    */
-  async sendProgress(phase: TUpdate['phase'], message?: string): Promise<void> {
-    await this.sendUpdate({ phase, message } as TUpdate)
-  }
-
-  /**
-   * Send the final result and mark as complete.
-   */
-  async sendResult<TResult>(result: TResult): Promise<void> {
-    await this.sendUpdate({
-      phase: this.config.completePhase,
-      result,
-    } as TUpdate)
+  async sendData(data: TData): Promise<void> {
+    await this.sendUpdate(this.config.completeEvent, data)
   }
 
   /**
    * Send an error message.
+   * Produces: `event: <errorEvent>\ndata: {"error":"...","...extra"}\n\n`
    */
   async sendError(error: string, extra?: Record<string, unknown>): Promise<void> {
-    await this.sendUpdate({
-      phase: this.config.errorPhase,
-      error,
-      ...extra,
-    } as TUpdate)
-  }
-
-  /**
-   * Send an update with custom metadata.
-   */
-  async sendWithMetadata<TMeta extends SSEMetadata>(
-    phase: TUpdate['phase'],
-    metadata: TMeta,
-    message?: string
-  ): Promise<void> {
-    await this.sendUpdate({
-      phase,
-      message,
-      metadata,
-    } as TUpdate & { metadata: TMeta })
-  }
-
-  /**
-   * Send a custom event with event: type prefix.
-   * Use for typed events like 'start', 'delta', 'done', 'error'.
-   */
-  async sendEvent(eventType: string, data: unknown): Promise<void> {
-    if (this.isClosed) return
-
-    try {
-      const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`
-      this.controller.enqueue(this.encoder.encode(payload))
-    } catch (error) {
-      this.isClosed = true
-      this.config.logger('[stream-orchestrator] Error sending event:', error)
-    }
+    await this.sendUpdate(this.config.errorEvent, { error, ...extra } as TData)
   }
 
   /**
@@ -365,14 +325,14 @@ export class StreamOrchestrator<TUpdate extends SSEUpdate = SSEUpdate> {
  * return createSSEResponse(stream)
  * ```
  */
-export function createStreamingResponse<TUpdate extends SSEUpdate = SSEUpdate>(
+export function createStreamingResponse<TData = unknown>(
   config?: StreamOrchestratorConfig
-): { stream: ReadableStream<Uint8Array>; orchestrator: StreamOrchestrator<TUpdate> } {
-  let orchestrator!: StreamOrchestrator<TUpdate>
+): { stream: ReadableStream<Uint8Array>; orchestrator: StreamOrchestrator<TData> } {
+  let orchestrator!: StreamOrchestrator<TData>
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      orchestrator = new StreamOrchestrator<TUpdate>(controller, config)
+      orchestrator = new StreamOrchestrator<TData>(controller, config)
     },
   })
 
