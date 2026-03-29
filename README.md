@@ -65,6 +65,7 @@ function App() {
       if (event === 'stage') console.log('Stage:', data)
     },
     onComplete: (result) => console.log('Done:', result),
+    onError: (error) => console.error('Error:', error),
   })
 
   return (

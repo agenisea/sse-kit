@@ -92,15 +92,17 @@ export function createSSEParser<T = unknown>(options: SSEParserOptions<T>) {
 
         if (line.startsWith('data: ')) {
           const payload = line.slice(6)
+          let data: T
           try {
-            const data = JSON.parse(payload) as T
-            onMessage(currentEvent, data)
+            data = JSON.parse(payload) as T
           } catch (err) {
             onError?.(
               err instanceof Error ? err : new Error('JSON parse error'),
               payload.slice(0, 120)
             )
+            continue
           }
+          onMessage(currentEvent, data)
         }
       }
       // Event resets at block boundary (next message gets its own event)

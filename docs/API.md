@@ -172,13 +172,22 @@ const { state, start, cancel, reset, isStreaming } = useSSEStream({
 })
 ```
 
+#### Returns
+
+| Method | Description |
+|--------|-------------|
+| `start(input)` | Start streaming. Returns `Promise<TResult \| undefined>`. Always resolves — errors are reported via `onError` callback and `state.error`, not promise rejection. |
+| `cancel()` | Abort the current stream |
+| `reset()` | Reset state to initial |
+| `isStreaming` | Whether a stream is active |
+
 #### State
 
 ```typescript
 interface SSEStreamState<TEvent, TResult> {
   event: TEvent          // Current event (from event: line)
   result: TResult | null // Final result (set on completeEvent)
-  error: string | null   // Error message (set on errorEvent)
+  error: string | null   // Error message (set on errorEvent or HTTP error)
   isStreaming: boolean    // Whether stream is active
   reconnectionInfo: ReconnectionInfo | null
 }
@@ -213,7 +222,7 @@ const parser = createSSEParser({
     // Optional — called for : comment lines
   },
   onError: (error, rawLine) => {
-    // Optional — called on parse errors
+    // Optional — called on JSON parse errors (not onMessage callback errors)
   },
 })
 

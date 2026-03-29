@@ -264,6 +264,8 @@ export function useSSEStream<
       },
     })
 
+    let errorHandled = false
+
     try {
       return await reconnect.execute(async (signal) => {
         const url = typeof endpoint === 'function' ? endpoint(input) : endpoint
@@ -317,6 +319,7 @@ export function useSSEStream<
               const error = extractError(data) || 'Unknown error'
               dispatch({ type: 'SET_ERROR', payload: { error } })
               currentOptions.onError?.(error)
+              errorHandled = true
               throw new Error(error)
             }
           },
@@ -343,10 +346,12 @@ export function useSSEStream<
         return undefined
       }
 
-      const errorMessage = error instanceof Error ? error.message : 'Stream failed'
-      dispatch({ type: 'SET_ERROR', payload: { error: errorMessage } })
-      currentOptions.onError?.(errorMessage)
-      throw error
+      if (!errorHandled) {
+        const errorMessage = error instanceof Error ? error.message : 'Stream failed'
+        dispatch({ type: 'SET_ERROR', payload: { error: errorMessage } })
+        currentOptions.onError?.(errorMessage)
+      }
+      return undefined
     } finally {
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null

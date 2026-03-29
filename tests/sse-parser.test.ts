@@ -113,6 +113,36 @@ describe('createSSEParser', () => {
     )
   })
 
+  it('propagates errors thrown by onMessage callback', () => {
+    const onMessage = vi.fn().mockImplementation(() => {
+      throw new Error('terminal error from callback')
+    })
+    const onError = vi.fn()
+    const parser = createSSEParser({ onMessage, onError })
+
+    expect(() => parser('data: {"ok":true}\n\n')).toThrow('terminal error from callback')
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('continues processing after JSON parse error but stops on callback error', () => {
+    const messages: unknown[] = []
+    const onMessage = vi.fn().mockImplementation((_event, data) => {
+      messages.push(data)
+      if ((data as Record<string, unknown>).stop) {
+        throw new Error('stop processing')
+      }
+    })
+    const onError = vi.fn()
+    const parser = createSSEParser({ onMessage, onError })
+
+    parser('data: bad json\n\n')
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(messages).toHaveLength(0)
+
+    expect(() => parser('data: {"stop":true}\n\n')).toThrow('stop processing')
+    expect(messages).toHaveLength(1)
+  })
+
   it('skips empty messages', () => {
     const onMessage = vi.fn()
     const parser = createSSEParser({ onMessage })

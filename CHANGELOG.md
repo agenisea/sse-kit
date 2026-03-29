@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-03-28
+
+### Changed
+
+- **Breaking**: `start()` no longer rejects on non-retriable stream errors (e.g., HTTP 429, 500). Errors are reported exclusively via the `onError` callback and `state.error`. This eliminates unhandled promise rejections when `start()` is called from React event handlers (the primary usage pattern).
+
+  **Migration**: If you previously relied on `start()` rejecting on errors, move your error handling to the `onError` callback:
+
+  ```typescript
+  // Before (0.2.x) — try/catch pattern
+  try {
+    await start(input)
+  } catch (e) {
+    showError(e.message)
+  }
+
+  // Before (0.2.x) — .catch() pattern
+  start(input).catch((e) => showError(e.message))
+
+  // After (0.3.0) — use onError callback
+  const { start } = useSSEStream({
+    onError: (message) => showError(message),
+    // ...
+  })
+  await start(input) // always resolves with TResult | undefined
+  ```
+
+### Fixed
+
+- Added explicit guard against double `onError`/`SET_ERROR` dispatch. The error is now reported exactly once regardless of error source (HTTP status, SSE event, or network failure). Previously, the single-dispatch behavior relied implicitly on the SSE parser's internal try/catch — the guard now makes the intent explicit.
+
 ## [0.2.0] - 2026-02-11
 
 ### Breaking Changes
