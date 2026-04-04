@@ -75,7 +75,6 @@ export interface SSEConnectionConfig<TInput> {
   endpoint: string | ((input: TInput) => string)
   method?: 'POST' | 'GET' | 'PUT' | 'PATCH'
   headers?: Record<string, string>
-  streamQueryParam?: boolean
 }
 
 /**
@@ -205,7 +204,6 @@ export function useSSEStream<
     completeEvent,
     errorEvent,
     reconnectingEvent,
-    streamQueryParam = true,
     warnOnUnload = true,
   } = options
 
@@ -269,9 +267,8 @@ export function useSSEStream<
     try {
       return await reconnect.execute(async (signal) => {
         const url = typeof endpoint === 'function' ? endpoint(input) : endpoint
-        const finalUrl = streamQueryParam ? `${url}?stream=true` : url
 
-        const response = await fetch(finalUrl, {
+        const response = await fetch(url, {
           method,
           headers: {
             'Content-Type': 'application/json',
@@ -357,7 +354,7 @@ export function useSSEStream<
         abortControllerRef.current = null
       }
     }
-  }, [endpoint, method, initialEvent, completeEvent, errorEvent, reconnectingEvent, streamQueryParam, retryConfig])
+  }, [endpoint, method, initialEvent, completeEvent, errorEvent, reconnectingEvent, retryConfig])
 
   const cancel = useCallback(() => {
     abortControllerRef.current?.abort()

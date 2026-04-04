@@ -197,7 +197,7 @@ interface SSEStreamState<TEvent, TResult> {
 
 ```typescript
 import type {
-  SSEConnectionConfig,  // endpoint, method, headers, streamQueryParam
+  SSEConnectionConfig,  // endpoint, method, headers
   SSEEventConfig,       // initialEvent, completeEvent, errorEvent, reconnectingEvent
   SSEStreamCallbacks,   // onUpdate, onComplete, onError
   SSEParseConfig,       // extractResult, extractError
